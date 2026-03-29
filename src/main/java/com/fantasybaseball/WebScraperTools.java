@@ -742,9 +742,26 @@ public class WebScraperTools {
     }
 
     private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
-    private static final long TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+    private static final int PODCAST_LOOKBACK_DAYS = 2;
 
-    @Tool("Fetches all podcast transcript summaries from the last 2 days. Returns cached summaries for all transcripts. If a transcript has no cached summary, it will be listed as needing processing.")
+    /**
+     * Parses the release date from a transcript filename.
+     * Expected format: YYYYMMDD-... (e.g., "20260327-Episode Title.txt")
+     * Returns null if the date cannot be parsed.
+     */
+    private LocalDate parseReleaseDateFromFilename(String filename) {
+        if (filename == null || filename.length() < 8) {
+            return null;
+        }
+        try {
+            String dateStr = filename.substring(0, 8);
+            return LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyyMMdd"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @Tool("Fetches podcast transcript summaries for episodes released in the last 2 days. Returns cached summaries only.")
     public String fetchAllTranscriptSummaries() {
         try {
             Path transcriptPath = Paths.get(TRANSCRIPT_DIR);
@@ -758,45 +775,48 @@ public class WebScraperTools {
                 Files.createDirectories(cacheDir);
             }
 
-            StringBuilder result = new StringBuilder("=== PODCAST TRANSCRIPT SUMMARIES (Last 2 Days) ===\n\n");
-            long twoDaysAgo = System.currentTimeMillis() - TWO_DAYS_MS;
+            StringBuilder result = new StringBuilder("=== PODCAST TRANSCRIPT SUMMARIES (Episodes from Last 3 Days) ===\n\n");
+            LocalDate cutoffDate = LocalDate.now().minusDays(PODCAST_LOOKBACK_DAYS);
             int totalCount = 0;
             int cachedCount = 0;
             java.util.List<String> uncachedFiles = new java.util.ArrayList<>();
 
             try (var dirStream = Files.newDirectoryStream(transcriptPath, "*.txt")) {
                 for (Path file : dirStream) {
-                    BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
-                    if (attrs.lastModifiedTime().toMillis() >= twoDaysAgo) {
-                        totalCount++;
-                        String filename = file.getFileName().toString();
-                        Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
+                    String filename = file.getFileName().toString();
+                    LocalDate releaseDate = parseReleaseDateFromFilename(filename);
 
-                        if (Files.exists(summaryPath)) {
-                            cachedCount++;
-                            String summary = Files.readString(summaryPath);
-                            result.append("### ").append(filename).append("\n");
-                            result.append(summary).append("\n\n");
-                        } else {
-                            uncachedFiles.add(filename);
-                        }
+                    // Skip files without parseable dates or older than cutoff
+                    if (releaseDate == null || releaseDate.isBefore(cutoffDate)) {
+                        continue;
+                    }
+
+                    totalCount++;
+                    Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
+
+                    if (Files.exists(summaryPath)) {
+                        cachedCount++;
+                        String summary = Files.readString(summaryPath);
+                        result.append("### ").append(filename).append("\n");
+                        result.append(summary).append("\n\n");
+                    } else {
+                        uncachedFiles.add(filename);
                     }
                 }
             }
 
             if (totalCount == 0) {
-                return "No podcast transcripts found from the last 2 days.";
+                return "No podcast episodes found from the last " + PODCAST_LOOKBACK_DAYS + " days.";
             }
 
             // Add header with counts
-            String header = "Found " + totalCount + " transcripts from the last 2 days. " + cachedCount + " have cached summaries.\n\n";
+            String header = "Found " + totalCount + " episodes released in the last " + PODCAST_LOOKBACK_DAYS + " days. " + cachedCount + " have summaries.\n\n";
             result.insert(result.indexOf("\n\n") + 2, header);
 
             // Note uncached count (don't list all files - too verbose)
             if (!uncachedFiles.isEmpty()) {
                 result.append("\n[Note: ").append(uncachedFiles.size())
-                      .append(" additional transcripts have not been summarized yet. ")
-                      .append("Run 'summarize' command to process them.]\n");
+                      .append(" additional episodes do not have summaries.]\n");
             }
 
             return result.toString();
@@ -805,39 +825,7 @@ public class WebScraperTools {
         }
     }
 
-    @Tool("Fetches a single podcast transcript by filename for summarization. Use this for transcripts that don't have cached summaries yet.")
-    public String fetchSingleTranscript(String filename) {
-        try {
-            Path filePath = Paths.get(TRANSCRIPT_DIR, filename);
-            if (!Files.exists(filePath)) {
-                return "Transcript not found: " + filename;
-            }
-
-            String content = Files.readString(filePath);
-            return "=== TRANSCRIPT: " + filename + " ===\n\n" + content +
-                "\n\n[Extract fantasy-relevant insights from this transcript, then call saveTranscriptSummary(\"" + filename + "\", summary) to cache it]";
-        } catch (Exception e) {
-            return "Error reading transcript " + filename + ": " + e.getMessage();
-        }
-    }
-
-    @Tool("Saves a summary of a podcast transcript to cache for future use.")
-    public String saveTranscriptSummary(String filename, String summary) {
-        try {
-            Path cacheDir = Paths.get(SUMMARY_CACHE_DIR);
-            if (!Files.exists(cacheDir)) {
-                Files.createDirectories(cacheDir);
-            }
-
-            Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
-            Files.writeString(summaryPath, summary);
-            return "Summary cached for " + filename;
-        } catch (Exception e) {
-            return "Error caching summary for " + filename + ": " + e.getMessage();
-        }
-    }
-
-    @Tool("Fetches all fantasy baseball news from all sources including podcast transcripts, filtered to last 2 days")
+    @Tool("Fetches all fantasy baseball news from all sources, filtered to last 2 days")
     public String fetchAllRecentNews() {
         StringBuilder allNews = new StringBuilder();
         allNews.append("Fetching news from last 2 days from all sources...\n\n");
@@ -851,14 +839,13 @@ public class WebScraperTools {
         allNews.append(fetchMlbTransactions()).append("\n");
         allNews.append(fetchRosterMoves()).append("\n");
         allNews.append(fetchMlbInjuries()).append("\n");
-        allNews.append(fetchAllTranscriptSummaries()).append("\n");
         return allNews.toString();
     }
 
-    @Tool("Fetches fantasy baseball news from fast sources only (RSS feeds + MLB API + cached transcripts, no browser scraping)")
+    @Tool("Fetches fantasy baseball news from fast sources only (RSS feeds + MLB API, no browser scraping)")
     public String fetchQuickNews() {
         StringBuilder allNews = new StringBuilder();
-        allNews.append("Fetching news from fast sources (RSS + API + transcripts)...\n\n");
+        allNews.append("Fetching news from fast sources (RSS + API)...\n\n");
         allNews.append(fetchEspnNews()).append("\n");
         allNews.append(fetchCbsSportsNews()).append("\n");
         allNews.append(fetchMlbNews()).append("\n");
@@ -867,7 +854,6 @@ public class WebScraperTools {
         allNews.append(fetchMlbTransactions()).append("\n");
         allNews.append(fetchRosterMoves()).append("\n");
         allNews.append(fetchMlbInjuries()).append("\n");
-        allNews.append(fetchAllTranscriptSummaries()).append("\n");
         return allNews.toString();
     }
 }

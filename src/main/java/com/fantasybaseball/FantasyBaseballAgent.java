@@ -5,7 +5,11 @@ import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.SystemMessage;
 
+import java.io.IOException;
+import java.nio.file.*;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Scanner;
 
 /**
@@ -302,32 +306,73 @@ public class FantasyBaseballAgent {
         emailLastResponse();
     }
 
-    private static boolean generateTranscriptSummaries() {
-        System.out.println("Generating transcript summaries (this may take a few minutes)...\n");
+    private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/transcripts";
+    private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
+    private static final int PODCAST_LOOKBACK_DAYS = 2;
+
+    /**
+     * Reads podcast summaries for episodes released in the last 2 days and formats as markdown.
+     * These are pre-generated summaries, so we append them directly without LLM processing.
+     */
+    private static String getPodcastSummariesMarkdown() {
+        StringBuilder result = new StringBuilder();
+        result.append("# Podcast Insights\n\n");
+
         try {
-            ProcessBuilder pb = new ProcessBuilder("/bin/bash",
-                System.getProperty("user.dir") + "/generate-summaries.sh");
-            pb.inheritIO();
-            Process process = pb.start();
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                System.err.println("Warning: generate-summaries.sh exited with code " + exitCode);
-                return false;
+            Path transcriptPath = Paths.get(TRANSCRIPT_DIR);
+            if (!Files.exists(transcriptPath)) {
+                return "";
             }
-            System.out.println("\nTranscript summaries complete.\n");
-            return true;
-        } catch (Exception e) {
-            System.err.println("Warning: Could not run generate-summaries.sh: " + e.getMessage());
-            return false;
+
+            LocalDate cutoffDate = LocalDate.now().minusDays(PODCAST_LOOKBACK_DAYS);
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+            int count = 0;
+
+            try (var dirStream = Files.newDirectoryStream(transcriptPath, "*.txt")) {
+                for (Path file : dirStream) {
+                    String filename = file.getFileName().toString();
+
+                    // Parse release date from filename (format: YYYYMMDD-...)
+                    if (filename.length() < 8) continue;
+                    LocalDate releaseDate;
+                    try {
+                        releaseDate = LocalDate.parse(filename.substring(0, 8), formatter);
+                    } catch (Exception e) {
+                        continue;
+                    }
+
+                    if (releaseDate.isBefore(cutoffDate)) continue;
+
+                    // Check for cached summary
+                    Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
+                    if (!Files.exists(summaryPath)) continue;
+
+                    // Extract episode title from filename (remove date prefix and extension)
+                    String title = filename.substring(9); // Skip "YYYYMMDD-"
+                    if (title.endsWith(".txt")) {
+                        title = title.substring(0, title.length() - 4);
+                    }
+
+                    String summary = Files.readString(summaryPath);
+                    result.append("## ").append(title).append("\n");
+                    result.append("*Released: ").append(releaseDate).append("*\n\n");
+                    result.append(summary).append("\n\n");
+                    count++;
+                }
+            }
+
+            if (count == 0) {
+                return "";
+            }
+
+            return result.toString();
+        } catch (IOException e) {
+            System.err.println("Error reading podcast summaries: " + e.getMessage());
+            return "";
         }
     }
 
     private static void generateDailyReport(BaseballNewsAssistant assistant, boolean sendEmail, boolean quickMode) {
-        // First, generate any missing transcript summaries
-        if (!generateTranscriptSummaries()) {
-            System.err.println("Continuing with report generation despite summary errors...\n");
-        }
-
         if (quickMode) {
             System.out.println("\nAgent: Generating quick report (RSS + API sources only)...\n");
         } else {
@@ -336,30 +381,33 @@ public class FantasyBaseballAgent {
         try {
             String prompt;
             if (quickMode) {
-                prompt = "Call fetchQuickNews to get all fantasy baseball news from the last 2 days (RSS feeds, MLB API, and podcast transcript summaries).\n\n" +
+                prompt = "Call fetchQuickNews to get all fantasy baseball news from the last 2 days (RSS feeds, MLB API).\n\n" +
                     "Create a fantasy baseball brief with these sections:\n" +
-                    "1. Executive Summary (top 5 most impactful items from ALL sources including podcasts)\n" +
+                    "1. Executive Summary (top 5 most impactful items)\n" +
                     "2. Injury Report (IL placements, returns, updates)\n" +
                     "3. Transactions & Roster Moves (trades, signings, call-ups, options)\n" +
                     "4. Pitching News (rankings, streaming options)\n" +
-                    "5. Podcast Insights (key takeaways from EACH podcast - list insights from every transcript)\n" +
-                    "6. Action Items (clear add/drop recommendations)\n\n" +
-                    "IMPORTANT: Include information from ALL podcast transcripts in the Podcast Insights section. " +
+                    "5. Action Items (clear add/drop recommendations)\n\n" +
                     "Use markdown formatting with headers and bold text for player names.";
             } else {
-                prompt = "Call fetchAllRecentNews to get all fantasy baseball news from the last 2 days (all sources including podcast transcript summaries).\n\n" +
+                prompt = "Call fetchAllRecentNews to get all fantasy baseball news from the last 2 days.\n\n" +
                     "Create a comprehensive daily fantasy baseball brief with these sections:\n" +
-                    "1. Executive Summary (top 5 most impactful items from ALL sources including podcasts)\n" +
+                    "1. Executive Summary (top 5 most impactful items)\n" +
                     "2. Injury Report (IL placements, returns, updates)\n" +
                     "3. Transactions & Roster Moves (trades, signings, call-ups, options)\n" +
                     "4. Pitching News (rankings, streaming options, starts to target/avoid)\n" +
                     "5. Prospect Watch (call-ups, demotions, debut candidates)\n" +
-                    "6. Podcast Insights (key takeaways from EACH podcast - list insights from every transcript)\n" +
-                    "7. Action Items (clear add/drop/trade recommendations)\n\n" +
-                    "IMPORTANT: Include information from ALL podcast transcripts in the Podcast Insights section. " +
+                    "6. Action Items (clear add/drop/trade recommendations)\n\n" +
                     "Use markdown formatting with headers and bold text for player names.";
             }
             String response = assistant.chat(prompt);
+
+            // Append podcast summaries directly (already pre-processed, no need for LLM)
+            String podcastSection = getPodcastSummariesMarkdown();
+            if (!podcastSection.isEmpty()) {
+                response = response + "\n\n" + podcastSection;
+            }
+
             lastResponse = response;
             System.out.println("Agent: " + response + "\n");
 
