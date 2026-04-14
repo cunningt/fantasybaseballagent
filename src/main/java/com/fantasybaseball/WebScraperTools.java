@@ -742,7 +742,7 @@ public class WebScraperTools {
     }
 
     private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
-    private static final int PODCAST_LOOKBACK_DAYS = 2;
+    private static final int PODCAST_LOOKBACK_DAYS = 1;
 
     /**
      * Parses the release date from a transcript filename.

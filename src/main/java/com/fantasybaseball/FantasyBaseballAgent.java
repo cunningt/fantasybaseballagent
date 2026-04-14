@@ -129,6 +129,11 @@ public class FantasyBaseballAgent {
                 continue;
             }
 
+            if (input.equalsIgnoreCase("podcasts")) {
+                sendPodcastSummaries();
+                continue;
+            }
+
             if (input.equalsIgnoreCase("daily")) {
                 // Generate full report, save, and email
                 generateDailyReport(assistant, true, false);
@@ -196,6 +201,9 @@ public class FantasyBaseballAgent {
                 // daily always sends email
                 generateDailyReport(assistant, true, false);
                 break;
+            case "podcasts":
+                sendPodcastSummaries();
+                break;
             case "help":
             case "--help":
             case "-h":
@@ -215,6 +223,7 @@ public class FantasyBaseballAgent {
         System.out.println("  quick          Fast report (RSS + API only), save to file");
         System.out.println("  report         Full report (all sources), save to file");
         System.out.println("  daily          Full report, save, and email");
+        System.out.println("  podcasts       Email most recent podcast summaries");
         System.out.println();
         System.out.println("Options:");
         System.out.println("  --email, -e    Send email after generating report");
@@ -246,6 +255,7 @@ public class FantasyBaseballAgent {
         System.out.println("  'save'         - Save last response to text file");
         System.out.println("  'email'        - Email last response to recipients");
         System.out.println("  'send'         - Save AND email last response");
+        System.out.println("  'podcasts'     - Email most recent podcast summaries");
         System.out.println("  'help'         - Show this help message");
         System.out.println("  'quit'         - Exit the agent");
         System.out.println("\nOr ask any fantasy baseball question!\n");
@@ -306,9 +316,23 @@ public class FantasyBaseballAgent {
         emailLastResponse();
     }
 
+    private static void sendPodcastSummaries() {
+        if (emailService == null) {
+            System.err.println("Email service not initialized. Check email.properties.\n");
+            return;
+        }
+        String summaries = getPodcastSummariesMarkdown();
+        if (summaries.isEmpty()) {
+            System.out.println("No recent podcast summaries found (last " + PODCAST_LOOKBACK_DAYS + " days).\n");
+            return;
+        }
+        System.out.println("Sending podcast summaries...");
+        emailService.sendEmail(summaries);
+    }
+
     private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/transcripts";
     private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
-    private static final int PODCAST_LOOKBACK_DAYS = 2;
+    private static final int PODCAST_LOOKBACK_DAYS = 1;
 
     /**
      * Reads podcast summaries for episodes released in the last 2 days and formats as markdown.
