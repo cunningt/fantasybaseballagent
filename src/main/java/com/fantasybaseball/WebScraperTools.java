@@ -41,7 +41,7 @@ public class WebScraperTools {
     private static final int MAX_AGE_DAYS = 2;
     private static final int TIMEOUT_MS = 45000;
     private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/transcripts";
+    private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/postprocessing";
 
     private static final List<DateTimeFormatter> DATE_FORMATTERS = List.of(
         DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.ENGLISH),

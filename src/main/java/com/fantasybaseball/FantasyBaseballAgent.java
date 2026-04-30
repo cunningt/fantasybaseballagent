@@ -330,7 +330,7 @@ public class FantasyBaseballAgent {
         emailService.sendEmail(summaries);
     }
 
-    private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/transcripts";
+    private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/postprocessing";
     private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
     private static final int PODCAST_LOOKBACK_DAYS = 1;
 
