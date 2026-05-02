@@ -367,9 +367,16 @@ public class FantasyBaseballAgent {
 
                     if (releaseDate.isBefore(cutoffDate)) continue;
 
-                    // Check for cached summary
+                    // Check for cached summary (handle both naming conventions)
+                    // Try filename.txt.summary first, then filename without .txt extension + .summary
                     Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
-                    if (!Files.exists(summaryPath)) continue;
+                    if (!Files.exists(summaryPath)) {
+                        String baseName = filename.endsWith(".txt")
+                            ? filename.substring(0, filename.length() - 4)
+                            : filename;
+                        summaryPath = Paths.get(SUMMARY_CACHE_DIR, baseName + ".summary");
+                        if (!Files.exists(summaryPath)) continue;
+                    }
 
                     // Extract episode title from filename (remove date prefix and extension)
                     String title = filename.substring(9); // Skip "YYYYMMDD-"
