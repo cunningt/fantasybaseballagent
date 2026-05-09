@@ -34,11 +34,11 @@ import java.util.regex.Pattern;
 
 /**
  * Tools for scraping fantasy baseball news using Playwright and RSS feeds.
- * Filters news to only include items from the last 1 day.
+ * Filters news to only include items from the last 2 days.
  */
 public class WebScraperTools {
 
-    private static final int MAX_AGE_DAYS = 1;
+    private static final int MAX_AGE_DAYS = 2;
     private static final int TIMEOUT_MS = 45000;
     private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/postprocessing";
