@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
  */
 public class WebScraperTools {
 
-    private static final int MAX_AGE_DAYS = 2;
+    private static final int MAX_AGE_DAYS = 3;
     private static final int TIMEOUT_MS = 45000;
     private static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/postprocessing";
@@ -742,7 +742,7 @@ public class WebScraperTools {
     }
 
     private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
-    private static final int PODCAST_LOOKBACK_DAYS = 1;
+    private static final int PODCAST_LOOKBACK_DAYS = 2;
 
     /**
      * Parses the release date from a transcript filename.

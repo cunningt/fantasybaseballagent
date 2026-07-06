@@ -1,7 +1,7 @@
 package com.fantasybaseball;
 
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.ollama.OllamaChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.SystemMessage;
 
@@ -10,16 +10,14 @@ import java.nio.file.*;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.util.Scanner;
+import java.util.*;
 
 /**
- * Fantasy Baseball News Agent using LangChain4J with Qwen 3.5 via Ollama.
+ * Fantasy Baseball News Agent using LangChain4J with Qwen 3.5 via omlx.
  *
  * Prerequisites:
- * 1. Install Ollama: https://ollama.ai
- * 2. Pull the model: ollama pull qwen3.5:4b
- * 3. Ensure Ollama is running: ollama serve
- * 4. Configure email.properties for email delivery
+ * 1. Start omlx server on 127.0.0.1:8000
+ * 2. Configure email.properties for email delivery
  */
 public class FantasyBaseballAgent {
 
@@ -65,11 +63,12 @@ public class FantasyBaseballAgent {
             System.err.println("Warning: Email service not available: " + e.getMessage() + "\n");
         }
 
-        // Configure the Ollama model
+        // Configure the OpenAI-compatible model (omlx)
         // Longer timeout needed for full report (scraping + LLM processing)
-        OllamaChatModel model = OllamaChatModel.builder()
-                .baseUrl("http://localhost:11434")
-                .modelName("qwen3.5:4b")
+        OpenAiChatModel model = OpenAiChatModel.builder()
+                .baseUrl("http://127.0.0.1:8000/v1")
+                .apiKey("not-needed")
+                .modelName("Qwen3.5-4B-MLX-4bit")
                 .timeout(Duration.ofMinutes(30))
                 .temperature(0.7)
                 .build();
@@ -164,7 +163,7 @@ public class FantasyBaseballAgent {
             } catch (Exception e) {
                 System.err.println("Error: " + e.getMessage());
                 System.err.println("Make sure Ollama is running with the qwen3.5:4b model.");
-                System.err.println("Run: ollama pull qwen3.5:4b && ollama serve\n");
+                System.err.println("Ensure omlx server is running on 127.0.0.1:8000\n");
             }
         }
 
@@ -203,6 +202,10 @@ public class FantasyBaseballAgent {
                 break;
             case "podcasts":
                 sendPodcastSummaries();
+                break;
+            case "podcasts-preview":
+                // print the digest markdown to stdout without emailing (dry run)
+                System.out.println(getPodcastSummariesMarkdown());
                 break;
             case "help":
             case "--help":
@@ -321,6 +324,7 @@ public class FantasyBaseballAgent {
             System.err.println("Email service not initialized. Check email.properties.\n");
             return;
         }
+        List<PodcastEpisode> episodes = collectRecentEpisodes();
         String summaries = getPodcastSummariesMarkdown();
         if (summaries.isEmpty()) {
             System.out.println("No recent podcast summaries found (last " + PODCAST_LOOKBACK_DAYS + " days).\n");
@@ -328,79 +332,170 @@ public class FantasyBaseballAgent {
         }
         System.out.println("Sending podcast summaries...");
         emailService.sendEmail(summaries);
+        recordEmailed(episodes);
+    }
+
+    /** Append the emailed episodes to postprocessing/emailed.log so the health
+     *  report (pipeline_report.py) can tell which episodes actually went out. */
+    private static void recordEmailed(List<PodcastEpisode> episodes) {
+        Path log = Paths.get(TRANSCRIPT_DIR, "emailed.log");
+        String stamp = LocalDate.now().toString();
+        StringBuilder sb = new StringBuilder();
+        for (PodcastEpisode ep : episodes) {
+            sb.append(stamp).append('\t')
+              .append(ep.released().toString().replace("-", "")).append('-')
+              .append(ep.title()).append('\n');
+        }
+        try {
+            Files.writeString(log, sb.toString(),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            System.err.println("Could not write emailed.log: " + e.getMessage());
+        }
     }
 
     private static final String TRANSCRIPT_DIR = "/Users/tcunning/src/podcasttranscribe/postprocessing";
     private static final String SUMMARY_CACHE_DIR = TRANSCRIPT_DIR + "/summaries";
-    private static final int PODCAST_LOOKBACK_DAYS = 1;
+    private static final int PODCAST_LOOKBACK_DAYS = 2;
+
+    // Podcasts to surface at the top of the digest, in this order (matched against
+    // the "**Podcast:**" header each summary carries).
+    private static final List<String> PRIORITY_PODCASTS = List.of(
+        "Baseball America", "RotoWire Fantasy Baseball Podcast");
+
+    /** One episode's summary plus the metadata parsed from its summary header. */
+    private record PodcastEpisode(String podcast, String title, LocalDate released,
+                                  String url, String body) {}
 
     /**
-     * Reads podcast summaries for episodes released in the last 2 days and formats as markdown.
-     * These are pre-generated summaries, so we append them directly without LLM processing.
+     * Reads podcast summaries for episodes released within the lookback window and formats
+     * a digest grouped by show: priority podcasts first, then the rest alphabetically, newest
+     * episode first within each. Summaries are pre-generated, so no LLM processing here.
      */
     private static String getPodcastSummariesMarkdown() {
-        StringBuilder result = new StringBuilder();
-        result.append("# Podcast Insights\n\n");
-
-        try {
-            Path transcriptPath = Paths.get(TRANSCRIPT_DIR);
-            if (!Files.exists(transcriptPath)) {
-                return "";
-            }
-
-            LocalDate cutoffDate = LocalDate.now().minusDays(PODCAST_LOOKBACK_DAYS);
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
-            int count = 0;
-
-            try (var dirStream = Files.newDirectoryStream(transcriptPath, "*.txt")) {
-                for (Path file : dirStream) {
-                    String filename = file.getFileName().toString();
-
-                    // Parse release date from filename (format: YYYYMMDD-...)
-                    if (filename.length() < 8) continue;
-                    LocalDate releaseDate;
-                    try {
-                        releaseDate = LocalDate.parse(filename.substring(0, 8), formatter);
-                    } catch (Exception e) {
-                        continue;
-                    }
-
-                    if (releaseDate.isBefore(cutoffDate)) continue;
-
-                    // Check for cached summary (handle both naming conventions)
-                    // Try filename.txt.summary first, then filename without .txt extension + .summary
-                    Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
-                    if (!Files.exists(summaryPath)) {
-                        String baseName = filename.endsWith(".txt")
-                            ? filename.substring(0, filename.length() - 4)
-                            : filename;
-                        summaryPath = Paths.get(SUMMARY_CACHE_DIR, baseName + ".summary");
-                        if (!Files.exists(summaryPath)) continue;
-                    }
-
-                    // Extract episode title from filename (remove date prefix and extension)
-                    String title = filename.substring(9); // Skip "YYYYMMDD-"
-                    if (title.endsWith(".txt")) {
-                        title = title.substring(0, title.length() - 4);
-                    }
-
-                    String summary = Files.readString(summaryPath);
-                    result.append("## ").append(title).append("\n");
-                    result.append("*Released: ").append(releaseDate).append("*\n\n");
-                    result.append(summary).append("\n\n");
-                    count++;
-                }
-            }
-
-            if (count == 0) {
-                return "";
-            }
-
-            return result.toString();
-        } catch (IOException e) {
-            System.err.println("Error reading podcast summaries: " + e.getMessage());
+        List<PodcastEpisode> episodes = collectRecentEpisodes();
+        if (episodes.isEmpty()) {
             return "";
         }
+
+        // group by podcast name; keep insertion order of first appearance for stability
+        Map<String, List<PodcastEpisode>> byPodcast = new LinkedHashMap<>();
+        for (PodcastEpisode ep : episodes) {
+            byPodcast.computeIfAbsent(ep.podcast(), k -> new ArrayList<>()).add(ep);
+        }
+
+        // ordering: priority shows first (in configured order), then the rest alphabetically
+        List<String> order = new ArrayList<>();
+        for (String p : PRIORITY_PODCASTS) {
+            if (byPodcast.containsKey(p)) order.add(p);
+        }
+        byPodcast.keySet().stream()
+            .filter(p -> !PRIORITY_PODCASTS.contains(p))
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .forEach(order::add);
+
+        StringBuilder result = new StringBuilder();
+        result.append("# Podcast Insights\n\n");
+        for (String podcast : order) {
+            List<PodcastEpisode> eps = byPodcast.get(podcast);
+            eps.sort(Comparator.comparing(PodcastEpisode::released).reversed());
+            result.append("## ").append(podcast).append("\n\n");
+            for (PodcastEpisode ep : eps) {
+                result.append("### ").append(ep.title()).append("\n");
+                result.append("*Released: ").append(ep.released()).append("*");
+                if (!ep.url().isBlank()) {
+                    result.append(" · [Listen](").append(ep.url()).append(")");
+                }
+                result.append("\n\n").append(ep.body()).append("\n\n");
+            }
+        }
+        result.append("---\n\n_")
+              .append(episodes.size()).append(" episode")
+              .append(episodes.size() == 1 ? "" : "s").append(" across ")
+              .append(order.size()).append(" podcast")
+              .append(order.size() == 1 ? "" : "s").append(" · generated ")
+              .append(LocalDate.now()).append("_\n");
+        return result.toString();
+    }
+
+    private static List<PodcastEpisode> collectRecentEpisodes() {
+        List<PodcastEpisode> episodes = new ArrayList<>();
+        Path transcriptPath = Paths.get(TRANSCRIPT_DIR);
+        if (!Files.exists(transcriptPath)) {
+            return episodes;
+        }
+        LocalDate cutoffDate = LocalDate.now().minusDays(PODCAST_LOOKBACK_DAYS);
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+        try (var dirStream = Files.newDirectoryStream(transcriptPath, "*.txt")) {
+            for (Path file : dirStream) {
+                String filename = file.getFileName().toString();
+                if (filename.length() < 9) continue;
+                LocalDate releaseDate;
+                try {
+                    releaseDate = LocalDate.parse(filename.substring(0, 8), formatter);
+                } catch (Exception e) {
+                    continue;
+                }
+                if (releaseDate.isBefore(cutoffDate)) continue;
+
+                Path summaryPath = Paths.get(SUMMARY_CACHE_DIR, filename + ".summary");
+                if (!Files.exists(summaryPath)) {
+                    String baseName = filename.endsWith(".txt")
+                        ? filename.substring(0, filename.length() - 4) : filename;
+                    summaryPath = Paths.get(SUMMARY_CACHE_DIR, baseName + ".summary");
+                    if (!Files.exists(summaryPath)) continue;
+                }
+
+                String title = filename.substring(9);
+                if (title.endsWith(".txt")) title = title.substring(0, title.length() - 4);
+
+                String summary = Files.readString(summaryPath);
+                String podcast = extractHeaderField(summary, "Podcast");
+                String url = extractHeaderField(summary, "URL");
+                if (podcast.isBlank()) podcast = "Other";
+                episodes.add(new PodcastEpisode(podcast, title, releaseDate, url,
+                                                stripSummaryHeader(summary)));
+            }
+        } catch (IOException e) {
+            System.err.println("Error reading podcast summaries: " + e.getMessage());
+        }
+        return episodes;
+    }
+
+    /** Reads a "**Field:** value" line from the top of a summary, or "" if absent. */
+    private static String extractHeaderField(String summary, String field) {
+        for (String line : summary.split("\n", 8)) {
+            String prefix = "**" + field + ":**";
+            if (line.startsWith(prefix)) {
+                return line.substring(prefix.length()).trim();
+            }
+            if (line.startsWith("##") || line.startsWith("---")) break;  // past the header block
+        }
+        return "";
+    }
+
+    // Drops the leading Podcast/URL header block (and its "---" divider), which the
+    // digest now renders itself, so it isn't duplicated under each episode.
+    private static String stripSummaryHeader(String summary) {
+        String[] lines = summary.split("\n");
+        int start = 0;
+        boolean sawHeader = false;
+        for (int i = 0; i < lines.length; i++) {
+            String t = lines[i].trim();
+            if (t.startsWith("**Podcast:**") || t.startsWith("**URL:**")) {
+                sawHeader = true;
+            } else if (sawHeader && (t.isEmpty() || t.equals("---"))) {
+                start = i + 1;  // skip the divider/blank lines after the header
+            } else if (sawHeader) {
+                break;
+            } else {
+                break;  // no header present
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i < lines.length; i++) sb.append(lines[i]).append("\n");
+        return sb.toString().strip();
     }
 
     private static void generateDailyReport(BaseballNewsAssistant assistant, boolean sendEmail, boolean quickMode) {
